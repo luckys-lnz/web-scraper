@@ -36,6 +36,12 @@ size_t write_callback(void *contents, size_t size, size_t nmemb, void *userp) {
 
 // Function to extract <title> content
 void extract_title(const char *html) {
+  // check for NULL
+  if (html == NULL) {
+    printf("No HTML data available.\n");
+    return;
+  }
+
   char *title_start = strstr(html, "<title>");
   if (title_start) {
     title_start += 7; // Move past "<title>"
@@ -55,6 +61,10 @@ void extract_title(const char *html) {
 }
 
 void extract_meta(const char *html) {
+  // check if html is NULL
+  if (html == NULL)
+    return;
+
   regex_t regex;
   regmatch_t matches[2];
   const char *pattern = "meta\\s+([^>]+)>";
@@ -72,6 +82,7 @@ void extract_meta(const char *html) {
     int end = matches[1].rm_eo;
 
     printf("meta: %.*s\n", end - start, cursor + start);
+    // move cursor forward
     cursor += matches[0].rm_eo;
   }
   regfree(&regex);
@@ -79,6 +90,9 @@ void extract_meta(const char *html) {
 
 // extract hrefs
 void extract_hrefs(const char *html) {
+  if (html == NULL)
+    return;
+
   regex_t regex;
   regmatch_t matches[2];
 
@@ -120,27 +134,16 @@ int main() {
 
     res = curl_easy_perform(curl);
 
-    // // grab title
+    // use DRY principle to handle multiple if statements
+
+    // // grab title, meta, hrefs
+
     if (res != CURLE_OK) {
       fprintf(stderr, "curl_easy_perform() failed: %s\n",
               curl_easy_strerror(res));
     } else {
       extract_title(chunk.response); // Extract title
-    }
-
-    // grab the <meta>
-    if (res != CURLE_OK) {
-      fprintf(stderr, "curl_easy_perform() failed: %s\n",
-              curl_easy_strerror(res));
-    } else {
-      extract_meta(chunk.response); // Extract meta
-    }
-
-    // grab the <href>
-    if (res != CURLE_OK) {
-      fprintf(stderr, "curl_easy_perform() failed: %s\n",
-              curl_easy_strerror(res));
-    } else {
+      extract_meta(chunk.response);  // Extract meta
       extract_hrefs(chunk.response); // Extract hrefs
     }
 
