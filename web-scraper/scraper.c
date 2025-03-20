@@ -83,8 +83,8 @@ void extract_meta(const char *html) {
 
   regex_t regex;
   regmatch_t matches[1];
-  const char *pattern = "<meta\\s+[^>]*>";
-
+  const char *pattern =
+      "<meta\\s+[^>]*name=[\"']([^\"']+)[\"'][^>]*content=[\"']([^\"']+)[\"']";
   if (regcomp(&regex, pattern, REG_EXTENDED) != 0) {
     printf("Could not compile regex\n");
     return;
@@ -163,4 +163,3 @@ int main() {
   curl_global_cleanup();
   return 0;
 }
-
