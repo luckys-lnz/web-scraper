@@ -133,6 +133,13 @@ void extract_meta(const char *html) {
 
   regex_t regex;
   regmatch_t matches[3];
+
+  // TODO: Task 1: Optimize HTML Parsing (Switch to libxml2 or gumbo-parser)
+  //
+  // TODO: Task 2: Implement a URL Queue with a Thread Pool
+  //
+  // TODO: Task 3: Save Results to a File (Instead of Printing)
+
   const char *pattern =
       "<meta\\s+[^>]*name=[\"']([^\"']+)[\"'][^>]*content=[\"']([^\"']+)[\"']";
 
