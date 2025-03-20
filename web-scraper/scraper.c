@@ -1,35 +1,41 @@
+#include "scraper.h"
 #include <curl/curl.h>
 #include <regex.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-// Struct to store response data dynamically
-struct Memory {
-  char
-      *response; // Pointer to dynamically allocated memory storing the response
-  size_t size;   // Size of the response data
-};
-
 /**
- * Callback function for handling response data received by libcurl.
- * This function dynamically allocates memory to store the response.
+ * @brief Callback function for handling HTTP response data in a CURL request.
  *
- * @param contents Pointer to the received data.
- * @param size Size of one data chunk.
- * @param nmemb Number of data chunks.
- * @param userp Pointer to user-defined data (Memory struct in this case).
- * @return The total size of the received data (size * nmemb).
+ * This function is called by libcurl when data is received from the server.
+ * It dynamically reallocates memory to store the received data and appends
+ * it to the existing buffer in the `Memory` struct.
+ *
+ * @param contents Pointer to the received data chunk.
+ * @param size Size of each data element.
+ * @param nmemb Number of elements received.
+ * @param userp Pointer to the user-defined Memory struct where data is stored.
+ * @return The total size of data processed (size * nmemb). Returns 0 if memory
+ *         allocation fails.
+ *
+ * @note The function dynamically expands the `response` buffer in `Memory`
+ *       using `realloc()`. The caller is responsible for freeing
+ *       `mem->response` when it is no longer needed.
+ * @note The function ensures that the response string is always
+ * null-terminated.
+ * @note If `realloc()` fails, the previously allocated memory is freed, and
+ *       an error message is printed.
  */
 size_t write_callback(void *contents, size_t size, size_t nmemb, void *userp) {
   size_t total_size = size * nmemb;
   struct Memory *mem = (struct Memory *)userp;
 
-  // Reallocate memory to accommodate new data
   char *ptr = realloc(mem->response, mem->size + total_size + 1);
   if (!ptr) {
+    free(mem->response);
     printf("Not enough memory\n");
-    return 0; // Return 0 to signal failure
+    return 0;
   }
 
   mem->response = ptr;
@@ -41,9 +47,53 @@ size_t write_callback(void *contents, size_t size, size_t nmemb, void *userp) {
 }
 
 /**
+ * @brief Fetches the HTML content of a given URL and stores it in a Memory
+ * struct.
+ *
+ * This function initializes a CURL session, performs an HTTP GET request to
+ * fetch the HTML content of the specified URL, and stores the response in the
+ * provided Memory struct. The function uses the `write_callback` function to
+ * handle the received data.
+ *
+ * @param url: The URL to fetch data from.
+ * @param chunk: Pointer to a Memory struct that will store the response data.
+ *
+ * @note The caller is responsible for freeing `chunk->response` after use to
+ *       prevent memory leaks.
+ * @note The function initializes and cleans up CURL globally, which may not be
+ *       ideal for repeated calls in a multi-threaded environment. Consider
+ *       initializing CURL globally once in `main()` if making multiple
+ * requests.
+ */
+void fetch_url(const char *url, struct Memory *chunk) {
+  CURL *curl;
+  CURLcode res;
+
+  curl_global_init(CURL_GLOBAL_ALL); // Initialize CURL globally
+  curl = curl_easy_init();           // Initialize CURL session
+
+  if (curl) {
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)chunk);
+
+    res = curl_easy_perform(curl); // Perform the request
+
+    if (res != CURLE_OK) {
+      fprintf(stderr, "curl_easy_perform() failed: %s\n",
+              curl_easy_strerror(res));
+    }
+
+    curl_easy_cleanup(curl); // Cleanup CURL session
+  }
+
+  curl_global_cleanup(); // Cleanup CURL globally
+}
+
+/**
  * Extracts and prints the content inside the <title> tag from the given HTML.
  *
- * @param html Pointer to the HTML content.
+ * @param html: Pointer to the HTML content.
  */
 void extract_title(const char *html) {
   if (html == NULL) {
@@ -75,16 +125,17 @@ void extract_title(const char *html) {
 /**
  * Extracts and prints all <meta> tags from the given HTML.
  *
- * @param html Pointer to the HTML content.
+ * @param html: Pointer to the HTML content.
  */
 void extract_meta(const char *html) {
   if (html == NULL)
     return;
 
   regex_t regex;
-  regmatch_t matches[1];
+  regmatch_t matches[3];
   const char *pattern =
       "<meta\\s+[^>]*name=[\"']([^\"']+)[\"'][^>]*content=[\"']([^\"']+)[\"']";
+
   if (regcomp(&regex, pattern, REG_EXTENDED) != 0) {
     printf("Could not compile regex\n");
     return;
@@ -92,10 +143,11 @@ void extract_meta(const char *html) {
 
   const char *cursor = html;
 
-  while (regexec(&regex, cursor, 1, matches, 0) == 0) {
-    int start = matches[0].rm_so;
-    int end = matches[0].rm_eo;
-    printf("Meta tag: %.*s\n", end - start, cursor + start);
+  while (regexec(&regex, cursor, 3, matches, 0) == 0) {
+    printf("Meta name: %.*s\n", matches[1].rm_eo - matches[1].rm_so,
+           cursor + matches[1].rm_so);
+    printf("Meta content: %.*s\n", matches[2].rm_eo - matches[2].rm_so,
+           cursor + matches[2].rm_so);
     cursor += matches[0].rm_eo;
   }
 
@@ -105,7 +157,7 @@ void extract_meta(const char *html) {
 /**
  * Extracts and prints all hyperlinks (<a href="...") from the given HTML.
  *
- * @param html Pointer to the HTML content.
+ * @param html: Pointer to the HTML content.
  */
 void extract_hrefs(const char *html) {
   if (html == NULL)
@@ -130,36 +182,4 @@ void extract_hrefs(const char *html) {
   }
 
   regfree(&regex);
-}
-
-int main() {
-  CURL *curl;
-  CURLcode res;
-  struct Memory chunk = {NULL, 0}; // Initialize response struct
-
-  curl_global_init(CURL_GLOBAL_ALL);
-  curl = curl_easy_init();
-
-  if (curl) {
-    curl_easy_setopt(curl, CURLOPT_URL, "https://www.google.com");
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
-
-    res = curl_easy_perform(curl);
-
-    if (res == CURLE_OK && chunk.response) {
-      extract_title(chunk.response);
-      extract_meta(chunk.response);
-      extract_hrefs(chunk.response);
-    } else {
-      fprintf(stderr, "curl_easy_perform() failed: %s\n",
-              curl_easy_strerror(res));
-    }
-
-    free(chunk.response);
-    curl_easy_cleanup(curl);
-  }
-
-  curl_global_cleanup();
-  return 0;
 }
