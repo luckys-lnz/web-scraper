@@ -6,6 +6,9 @@
  * @param html: Pointer to the HTML content.
  */
 void extract_title(const char *html) {
+  if (!html)
+    return;
+
   xmlDocPtr doc = htmlReadMemory(html, strlen(html), NULL, NULL,
                                  HTML_PARSE_RECOVER | HTML_PARSE_NOERROR |
                                      HTML_PARSE_NOWARNING);
@@ -14,14 +17,30 @@ void extract_title(const char *html) {
     return;
   }
 
-  // xmlNodePtr root = xmlDocGetRootElement(doc);
   xmlXPathContextPtr context = xmlXPathNewContext(doc);
+  if (!context) {
+    fprintf(stderr, "Failed to create XPath context\n");
+    xmlFreeDoc(doc);
+    return;
+  }
+
   xmlXPathObjectPtr result =
       xmlXPathEvalExpression((xmlChar *)"//title", context);
+  if (!result) {
+    fprintf(stderr, "XPath evaluation failed\n");
+    xmlXPathFreeContext(context);
+    xmlFreeDoc(doc);
+    return;
+  }
 
-  if (result && result->nodesetval->nodeNr > 0) {
+  if (result->nodesetval && result->nodesetval->nodeNr > 0) {
     xmlNodePtr node = result->nodesetval->nodeTab[0];
-    printf("Title: %s\n", xmlNodeGetContent(node));
+    xmlChar *title = xmlNodeGetContent(node);
+
+    if (title) {
+      printf("Title: %s\n", title);
+      xmlFree(title);
+    }
   } else {
     printf("No <title> found.\n");
   }
@@ -30,3 +49,4 @@ void extract_title(const char *html) {
   xmlXPathFreeContext(context);
   xmlFreeDoc(doc);
 }
+
