@@ -5,6 +5,8 @@
 
 #define NUM_THREADS 3
 
+pthread_mutex_t print_mutex; // Mutex for printing
+
 void *scrape(void *arg) {
   const char *url = (const char *)arg;
   struct Memory chunk = {NULL, 0};
@@ -12,9 +14,13 @@ void *scrape(void *arg) {
   fetch_url(url, &chunk);
 
   if (chunk.response) {
+    pthread_mutex_lock(&print_mutex);
+    printf("\n=== Scraping: %s ===\n", url);
     extract_title(chunk.response);
     extract_meta(chunk.response);
     extract_hrefs(chunk.response);
+    pthread_mutex_unlock(&print_mutex);
+
     free(chunk.response);
   }
 
@@ -25,6 +31,9 @@ int main() {
   pthread_t threads[NUM_THREADS];
   const char *urls[] = {"https://archlinux.org/", "https://www.google.com/",
                         "https://github.com/"};
+
+  curl_global_init(CURL_GLOBAL_ALL);      // Initialize CURL once
+  pthread_mutex_init(&print_mutex, NULL); // Initialize mutex
 
   for (int i = 0; i < NUM_THREADS; i++) {
     if (pthread_create(&threads[i], NULL, scrape, (void *)urls[i]) != 0) {
@@ -37,5 +46,10 @@ int main() {
     pthread_join(threads[i], NULL);
   }
 
+  pthread_mutex_destroy(&print_mutex);
+  curl_global_cleanup();
   return 0;
 }
+
+// compiled using gcc -o scraper scraper.c extract_hrefs.c extract_meta.c fetch_url.c extract_title.c write_callback.c \
+//    $(pkg-config --cflags --libs libxml-2.0 libcurl) -lpthread -Wall
