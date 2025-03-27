@@ -1,7 +1,15 @@
 #ifndef SCRAPER_H
 #define SCRAPER_H
 
+#include <curl/curl.h>
+#include <libxml/HTMLparser.h>
+#include <libxml/tree.h>
+#include <libxml/xpath.h>
+#include <regex.h>
 #include <stddef.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 // Struct for storing fetched HTML data
 struct Memory {
