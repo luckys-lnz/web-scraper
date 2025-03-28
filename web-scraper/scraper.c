@@ -50,6 +50,3 @@ int main() {
   curl_global_cleanup();
   return 0;
 }
-
-// compiled using gcc -o scraper scraper.c extract_hrefs.c extract_meta.c fetch_url.c extract_title.c write_callback.c \
-//    $(pkg-config --cflags --libs libxml-2.0 libcurl) -lpthread -Wall
