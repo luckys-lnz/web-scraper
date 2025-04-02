@@ -1,37 +1,31 @@
-#include "scraper.h"
+#include "fetch_url.h"
+#include "write_callback.h"
+#include <stdio.h>
+#include <stdlib.h>
 
 /**
- * Fetches the HTML content of a given URL and stores it in a Memory struct.
- *
- * @param url: The URL to fetch data from.
- * @param chunk: Pointer to a Memory struct that will store the response data.
- *
- * @note The caller must free `chunk->response` after use.
+ * Fetches the content of a URL using libcurl.
  */
 void fetch_url(const char *url, struct Memory *chunk) {
-  CURL *curl;
-  CURLcode res;
-
-  curl = curl_easy_init(); // Initialize CURL session
-
+  CURL *curl = curl_easy_init();
   if (!curl) {
     fprintf(stderr, "Failed to initialize CURL\n");
     return;
   }
 
+  chunk->response = malloc(1);
+  chunk->size = 0;
+
   curl_easy_setopt(curl, CURLOPT_URL, url);
   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
   curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)chunk);
-  curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);  // Follow redirects
-  curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, ""); // Handle gzip & deflate
+  curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+  curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L); // Timeout for safety
 
-  res = curl_easy_perform(curl); // Perform the request
-
+  CURLcode res = curl_easy_perform(curl);
   if (res != CURLE_OK) {
-    fprintf(stderr, "curl_easy_perform() failed: %s\n",
-            curl_easy_strerror(res));
+    fprintf(stderr, "CURL error: %s\n", curl_easy_strerror(res));
   }
 
-  curl_easy_cleanup(curl); // Cleanup CURL session
+  curl_easy_cleanup(curl);
 }
-
