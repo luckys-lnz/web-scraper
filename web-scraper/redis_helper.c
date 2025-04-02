@@ -33,6 +33,11 @@ void close_redis() {
   }
 }
 
+int is_crawl_allowed(const char *base_url, const char *target_path) {
+  // TODO: Implement actual robots.txt checking
+  return 1; // Allow crawling for now (replace with actual logic)
+}
+
 /**
  * Checks if a URL has already been visited.
  * Returns 1 if visited, 0 otherwise.
