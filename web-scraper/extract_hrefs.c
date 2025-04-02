@@ -3,9 +3,6 @@
 #include <libxml/HTMLparser.h>
 #include <libxml/xpath.h>
 #include <regex.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 
 /**
  * Normalizes and sanitizes a URL:
