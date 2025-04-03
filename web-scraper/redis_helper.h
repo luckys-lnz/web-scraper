@@ -13,6 +13,6 @@ void mark_visited(const char *url);
 
 // URL queue management
 char *fetch_url_from_queue();
-void push_url_to_queue(const char *url);
+void push_url_to_queue(const char *url, int priority);
 
 #endif
