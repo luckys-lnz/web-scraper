@@ -65,24 +65,47 @@ void mark_visited(const char *url) {
  * Returns NULL if the queue is empty.
  */
 char *fetch_url_from_queue() {
-  pthread_mutex_lock(&redis_mutex);
-  redisReply *reply = redisCommand(redis, "LPOP %s", URL_QUEUE);
-
-  char *url = NULL;
-  if (reply && reply->type == REDIS_REPLY_STRING) {
-    url = strdup(reply->str);
+  redisContext *ctx = redisConnect("127.0.0.1", 6379);
+  if (!ctx || ctx->err) {
+    fprintf(stderr, "Redis connection failed\n");
+    return NULL;
   }
 
+  // Fetch the highest priority URL
+  redisReply *reply = redisCommand(ctx, "ZRANGE %s 0 0 WITHSCORES", URL_QUEUE);
+  if (!reply || reply->type != REDIS_REPLY_ARRAY || reply->elements == 0) {
+    if (reply)
+      freeReplyObject(reply);
+    redisFree(ctx);
+    return NULL;
+  }
+
+  char *url = strdup(reply->element[0]->str);
   freeReplyObject(reply);
-  pthread_mutex_unlock(&redis_mutex);
+
+  // Remove the URL from the queue after fetching
+  reply = redisCommand(ctx, "ZREM %s %s", URL_QUEUE, url);
+  if (reply)
+    freeReplyObject(reply);
+
+  redisFree(ctx);
   return url;
 }
 
 /**
  * Pushes a new URL into the Redis queue.
  */
-void push_url_to_queue(const char *url) {
-  pthread_mutex_lock(&redis_mutex);
-  redisCommand(redis, "RPUSH %s %s", URL_QUEUE, url);
-  pthread_mutex_unlock(&redis_mutex);
+void push_url_to_queue(const char *url, int priority) {
+  redisContext *ctx = redisConnect("127.0.0.1", 6379);
+  if (!ctx || ctx->err) {
+    fprintf(stderr, "Redis connection failed\n");
+    return;
+  }
+
+  redisReply *reply =
+      redisCommand(ctx, "ZADD %s %d %s", URL_QUEUE, priority, url);
+  if (reply)
+    freeReplyObject(reply);
+
+  redisFree(ctx);
 }
