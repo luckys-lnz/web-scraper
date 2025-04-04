@@ -1,6 +1,8 @@
 #include "redis_helper.h"
 #include "scraper.h"
 #include <libxml/HTMLparser.h>
+#include <libxml/uri.h>
+#include <libxml/xmlmemory.h>
 #include <libxml/xpath.h>
 #include <regex.h>
 
@@ -36,23 +38,34 @@ char *normalize_url(const char *base_url, const char *href) {
     return strdup(href);
   }
 
-  // Ensure base_url ends with '/'
-  size_t base_len = strlen(base_url);
-  size_t href_len = strlen(href);
-  int needs_slash = (base_url[base_len - 1] != '/') && (href[0] != '/');
+  // use libxml's URI functions to resolve relative URLs
+  xmlChar *escped_base = xmlURIEscapeStr((const xmlChar *)base_url, NULL);
+  xmlChar *escped_href = xmlURIEscapeStr((const xmlChar *)href, NULL);
 
-  char *absolute_url = malloc(base_len + href_len + (needs_slash ? 2 : 1));
-  if (!absolute_url) {
-    fprintf(stderr, "Memory allocation failed\n");
+  xmlChar *absolute_uri = xmlBuildURI(escped_base, escped_href);
+  xmlFree(escped_base);
+  xmlFree(escped_href);
+
+  // Check if the URI is valid
+  if (!absolute_uri)
     return NULL;
+
+  // convert to stirng
+  char *result = strdup((const char *)absolute_uri);
+  xmlFree(absolute_uri);
+
+  // Remove fragment identifiers (`#...`)
+  char *fragment = strchr(result, '#');
+  if (fragment)
+    *fragment = '\0'; // Truncate at `#`
+
+  // Check if the URL is valid
+  size_t len = strlen(result);
+  if (len > 1 && result[len - 1] == '/') {
+    result[len - 1] = '\0'; // Remove trailing slash
   }
 
-  strcpy(absolute_url, base_url);
-  if (needs_slash)
-    strcat(absolute_url, "/");
-  strcat(absolute_url, href);
-
-  return absolute_url;
+  return result;
 }
 
 /**
@@ -88,7 +101,7 @@ void extract_hrefs(const char *html, const char *base_url) {
 
       if (normalized_url) {
         if (!is_visited(normalized_url)) { // Only add if not visited
-          push_url_to_queue(normalized_url);
+          push_url_to_queue(normalized_url, 1);
           printf("Discovered: %s\n", normalized_url);
         }
         free(normalized_url);
