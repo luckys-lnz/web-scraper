@@ -81,7 +81,7 @@ int main() {
                              "https://www.google.com/", "https://github.com/"};
   for (int i = 0; i < NUM_THREADS; i++) {
     fetch_robots_txt(seed_urls[i]);
-    push_url_to_queue(seed_urls[i]);
+    push_url_to_queue(seed_urls[i], 0);
   }
 
   for (int i = 0; i < NUM_THREADS; i++) {
