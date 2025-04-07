@@ -1,4 +1,5 @@
 #include "redis_helper.h"
+#include <hiredis/hiredis.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,6 +12,7 @@
 
 static redisContext *redis = NULL;
 static pthread_mutex_t redis_mutex = PTHREAD_MUTEX_INITIALIZER;
+redisContext *redis_ctx = NULL; // Global Redis context
 
 /**
  * Initializes the Redis connection.
@@ -96,16 +98,17 @@ char *fetch_url_from_queue() {
  * Pushes a new URL into the Redis queue.
  */
 void push_url_to_queue(const char *url, int priority) {
-  redisContext *ctx = redisConnect("127.0.0.1", 6379);
-  if (!ctx || ctx->err) {
-    fprintf(stderr, "Redis connection failed\n");
-    return;
-  }
+  redisReply *reply;
 
-  redisReply *reply =
-      redisCommand(ctx, "ZADD %s %d %s", URL_QUEUE, priority, url);
-  if (reply)
+  // Check if URL has already been visited
+  reply = redisCommand(redis_ctx, "SISMEMBER visited_urls %s", url);
+  if (reply->type == REDIS_REPLY_INTEGER && reply->integer == 1) {
     freeReplyObject(reply);
+    return; // Already visited, skip
+  }
+  freeReplyObject(reply);
 
-  redisFree(ctx);
+  // Add to priority queue if not already present
+  reply = redisCommand(redis_ctx, "ZADD url_queue %d %s", priority, url);
+  freeReplyObject(reply);
 }
