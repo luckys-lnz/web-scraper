@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #define REDIS_HOST "127.0.0.1"
 #define REDIS_PORT 6379
@@ -18,16 +19,33 @@ redisContext *redis_ctx = NULL; // Global Redis context
  * Initializes the Redis connection.
  */
 void init_redis() {
-  redis_ctx = redisConnect("127.0.0.1", 6379);
-  if (redis_ctx == NULL || redis_ctx->err) {
-    if (redis_ctx) {
-      fprintf(stderr, "Redis connection error: %s\n", redis_ctx->errstr);
-      redisFree(redis_ctx);
-    } else {
-      fprintf(stderr, "Redis connection error: can't allocate context\n");
+  int retries = 5;
+  int delay_ms = 500;
+
+  for (int i = 0; i < retries; ++i) {
+    redis_ctx = redisConnect(REDIS_HOST, REDIS_PORT);
+    if (redis_ctx && !redis_ctx->err) {
+      return; // Success
     }
-    exit(EXIT_FAILURE);
+
+    if (redis_ctx) {
+      fprintf(stderr, "Redis connection attempt %d failed: %s\n", i + 1,
+              redis_ctx->errstr);
+      redisFree(redis_ctx);
+      redis_ctx = NULL;
+    } else {
+      fprintf(stderr, "Redis connection attempt %d failed: Unknown error\n",
+              i + 1);
+    }
+
+    struct timespec req = {0};
+    req.tv_sec = delay_ms / 1000;               // Convert ms to seconds
+    req.tv_nsec = (delay_ms % 1000) * 1000000L; // Convert ms to nanoseconds
+    nanosleep(&req, NULL);
   }
+
+  fprintf(stderr, "Failed to connect to Redis after %d attempts.\n", retries);
+  exit(EXIT_FAILURE);
 }
 
 /**
@@ -60,9 +78,19 @@ int is_visited(const char *url) {
 /**
  * Marks a URL as visited.
  */
-void mark_visited(const char *url) {
+void mark_visited_bulk(const char **urls, int count) {
   pthread_mutex_lock(&redis_mutex);
-  redisCommand(redis, "SADD %s %s", VISITED_SET, url);
+
+  for (int i = 0; i < count; i++) {
+    redisAppendCommand(redis_ctx, "SADD %s %s", VISITED_SET, urls[i]);
+  }
+
+  for (int i = 0; i < count; i++) {
+    redisReply *reply;
+    redisGetReply(redis_ctx, (void **)&reply);
+    freeReplyObject(reply);
+  }
+
   pthread_mutex_unlock(&redis_mutex);
 }
 
@@ -99,20 +127,29 @@ char *fetch_url_from_queue() {
 }
 
 /**
- * Pushes a new URL into the Redis queue.
+ * Pushes a new URL into the Redis priority queue if it hasn't been visited.
  */
 void push_url_to_queue(const char *url, int priority) {
-  redisReply *reply;
+  pthread_mutex_lock(&redis_mutex);
 
-  // Check if URL has already been visited
-  reply = redisCommand(redis_ctx, "SISMEMBER visited_urls %s", url);
+  redisReply *reply =
+      redisCommand(redis_ctx, "SISMEMBER %s %s", VISITED_SET, url);
+  if (!reply) {
+    fprintf(stderr, "Redis command failed: SISMEMBER\n");
+    pthread_mutex_unlock(&redis_mutex);
+    return;
+  }
+
   if (reply->type == REDIS_REPLY_INTEGER && reply->integer == 1) {
     freeReplyObject(reply);
-    return; // Already visited, skip
+    pthread_mutex_unlock(&redis_mutex);
+    return; // Already visited
   }
   freeReplyObject(reply);
 
-  // Add to priority queue if not already present
-  reply = redisCommand(redis_ctx, "ZADD url_queue %d %s", priority, url);
-  freeReplyObject(reply);
+  reply = redisCommand(redis_ctx, "ZADD %s %d %s", URL_QUEUE, priority, url);
+  if (reply)
+    freeReplyObject(reply);
+
+  pthread_mutex_unlock(&redis_mutex);
 }
