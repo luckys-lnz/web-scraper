@@ -18,10 +18,14 @@ redisContext *redis_ctx = NULL; // Global Redis context
  * Initializes the Redis connection.
  */
 void init_redis() {
-  redis = redisConnect(REDIS_HOST, REDIS_PORT);
-  if (!redis || redis->err) {
-    fprintf(stderr, "Redis connection failed: %s\n",
-            redis ? redis->errstr : "Unknown error");
+  redis_ctx = redisConnect("127.0.0.1", 6379);
+  if (redis_ctx == NULL || redis_ctx->err) {
+    if (redis_ctx) {
+      fprintf(stderr, "Redis connection error: %s\n", redis_ctx->errstr);
+      redisFree(redis_ctx);
+    } else {
+      fprintf(stderr, "Redis connection error: can't allocate context\n");
+    }
     exit(EXIT_FAILURE);
   }
 }
