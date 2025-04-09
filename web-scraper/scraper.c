@@ -61,7 +61,9 @@ void *scrape(void *arg) {
       extract_hrefs(chunk.response, url);
       pthread_mutex_unlock(&print_mutex);
 
-      mark_visited(url);
+      // Extract and store links
+      const char *urls[] = {url};
+      mark_visited_bulk(urls, 1);
       free(chunk.response);
     }
 
@@ -77,8 +79,8 @@ int main() {
   init_redis();
 
   // Fetch `robots.txt` for each seed URL
-  const char *seed_urls[] = {"https://archlinux.org/",
-                             "https://www.google.com/", "https://github.com/"};
+  const char *seed_urls[] = {"https://alibaba.com/", "https://www.google.com/",
+                             "https://www.ebay.com/"};
   for (int i = 0; i < NUM_THREADS; i++) {
     fetch_robots_txt(seed_urls[i]);
     push_url_to_queue(seed_urls[i], 0);

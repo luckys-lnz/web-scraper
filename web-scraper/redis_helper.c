@@ -47,7 +47,6 @@ void init_redis() {
   fprintf(stderr, "Failed to connect to Redis after %d attempts.\n", retries);
   exit(EXIT_FAILURE);
 }
-
 /**
  * Closes the Redis connection.
  */
