@@ -1,4 +1,6 @@
-#include "write_callback.h"
+#include "scraper.h"
+#include <stdlib.h>
+#include <string.h>
 
 /**
  * @brief Callback function for handling HTTP response data in a CURL request.
@@ -23,20 +25,19 @@
  *       an error message is printed.
  */
 size_t write_callback(void *contents, size_t size, size_t nmemb, void *userp) {
-  size_t total_size = size * nmemb;
+  size_t realsize = size * nmemb;
   struct Memory *mem = (struct Memory *)userp;
 
-  char *ptr = realloc(mem->response, mem->size + total_size + 1);
+  char *ptr = realloc(mem->response, mem->size + realsize + 1);
   if (!ptr) {
-    free(mem->response);
-    fprintf(stderr, "Not enough memory\n");
+    fprintf(stderr, "Memory allocation failed in write_callback\n");
     return 0;
   }
 
   mem->response = ptr;
-  memcpy(&(mem->response[mem->size]), contents, total_size);
-  mem->size += total_size;
-  mem->response[mem->size] = '\0'; // Null-terminate the string
+  memcpy(&(mem->response[mem->size]), contents, realsize);
+  mem->size += realsize;
+  mem->response[mem->size] = 0;
 
-  return total_size;
+  return realsize;
 }
