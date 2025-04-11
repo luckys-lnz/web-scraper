@@ -105,6 +105,13 @@ static int is_redis_running(void) {
   return 0;
 }
 
+// I ddied all of this to make sure that redis is installed and running
+// and that the connection is established before we start using it.
+// This is important because if we try to use Redis without checking
+// if it's installed and running, we might get unexpected errors
+// or crashes. This way, we can provide better error messages and
+// handle the connection more gracefully.
+
 // Initialize Redis connection
 int init_redis(const char *host, int port) {
   if (redis_ctx) {
