@@ -5,6 +5,11 @@
 #include <libxml/xmlmemory.h>
 #include <libxml/xpath.h>
 #include <regex.h>
+#include "logger.h"
+#include "robots_parser.h"  // For redis_ctx declaration
+
+// Redis context (declared in robots_parser.h)
+extern redisContext *redis_ctx;
 
 /**
  * Normalizes and sanitizes a URL:
@@ -75,17 +80,44 @@ char *normalize_url(const char *base_url, const char *href) {
  * @param base_url The base URL of the page.
  */
 void extract_hrefs(const char *html, const char *base_url) {
+  if (!html || !base_url) {
+    LOG_ERROR("Invalid parameters to extract_hrefs");
+    return;
+  }
+
   xmlDocPtr doc = htmlReadMemory(html, strlen(html), NULL, NULL,
                                  HTML_PARSE_RECOVER | HTML_PARSE_NOERROR |
                                      HTML_PARSE_NOWARNING);
-  if (!doc)
+  if (!doc) {
+    LOG_ERROR("Failed to parse HTML document");
     return;
+  }
 
   xmlXPathContextPtr context = xmlXPathNewContext(doc);
-  xmlXPathObjectPtr result =
-      xmlXPathEvalExpression((xmlChar *)"//a[@href]", context);
+  if (!context) {
+    LOG_ERROR("Failed to create XPath context");
+    xmlFreeDoc(doc);
+    return;
+  }
 
-  if (!result || !result->nodesetval || result->nodesetval->nodeNr == 0) {
+  xmlXPathObjectPtr result = xmlXPathEvalExpression((xmlChar *)"//a[@href]", context);
+  if (!result) {
+    LOG_ERROR("Failed to evaluate XPath expression");
+    xmlXPathFreeContext(context);
+    xmlFreeDoc(doc);
+    return;
+  }
+
+  if (!result->nodesetval || result->nodesetval->nodeNr == 0) {
+    xmlXPathFreeObject(result);
+    xmlXPathFreeContext(context);
+    xmlFreeDoc(doc);
+    return;
+  }
+
+  // Check Redis connection before processing URLs
+  if (!redis_ctx || redis_ctx->err) {
+    LOG_ERROR("Redis connection not available for URL processing");
     xmlXPathFreeObject(result);
     xmlXPathFreeContext(context);
     xmlFreeDoc(doc);
@@ -94,20 +126,23 @@ void extract_hrefs(const char *html, const char *base_url) {
 
   for (int i = 0; i < result->nodesetval->nodeNr; i++) {
     xmlNodePtr node = result->nodesetval->nodeTab[i];
+    if (!node) continue;
+
     xmlChar *href = xmlGetProp(node, (xmlChar *)"href");
+    if (!href) continue;
 
-    if (href) {
-      char *normalized_url = normalize_url(base_url, (char *)href);
+    char *normalized_url = normalize_url(base_url, (char *)href);
+    xmlFree(href);
 
-      if (normalized_url) {
-        if (!is_visited(normalized_url)) { // Only add if not visited
-          push_url_to_queue(normalized_url, 1);
-          printf("Discovered: %s\n", normalized_url);
-        }
-        free(normalized_url);
+    if (normalized_url) {
+      // Check if URL is already visited
+      int visited = is_visited(normalized_url);
+      if (!visited) {
+        // Add to queue if not visited
+        push_url_to_queue(normalized_url, 1);
+        LOG_INFO("Discovered: %s", normalized_url);
       }
-
-      xmlFree(href);
+      free(normalized_url);
     }
   }
 
