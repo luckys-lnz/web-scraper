@@ -2,6 +2,20 @@
 #define ROBOTS_PARSER_H
 
 #include <stdbool.h>
+#include <pthread.h>
+#include <hiredis/hiredis.h>
+
+extern pthread_mutex_t redis_mutex;
+extern redisContext *redis_ctx;
+
+/**
+ * Extracts the domain from a URL.
+ * 
+ * @param url The URL to extract the domain from.
+ * @return A newly allocated string containing the domain, or NULL on error.
+ *         The caller is responsible for freeing the returned string.
+ */
+char *extract_domain(const char *url);
 
 /**
  * Checks if crawling is allowed for a given URL based on `robots.txt`.
