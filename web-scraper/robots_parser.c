@@ -1,5 +1,6 @@
 #include "robots_parser.h"
 #include "fetch_url.h"
+#include "mutexes.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -7,7 +8,7 @@
 #include <errno.h>
 
 // Global variables
-pthread_mutex_t redis_mutex = PTHREAD_MUTEX_INITIALIZER;
+extern pthread_mutex_t redis_mutex;
 extern redisContext *redis_ctx;
 
 #define INITIAL_RULE_CAPACITY 16
