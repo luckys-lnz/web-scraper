@@ -36,34 +36,50 @@ typedef struct {
 } bulk_operation_data;
 
 // Helper function to check if Redis is initialized
+// int is_redis_initialized(void)
+// {
+//   if (!redis_ctx)
+//   {
+//     LOG_ERROR("Redis not initialized");
+//     return 0;
+//   }
+//   return 1;
+// }
+//
 int is_redis_initialized(void) {
-  if (!redis_ctx) {
-    LOG_ERROR("Redis not initialized");
-    return 0;
-  }
-  return 1;
+  LOG_DEBUG("redis_ctx at is_redis_initialized(): %p", redis_ctx);
+  return redis_ctx != NULL;
 }
-
 // Helper function to execute Redis commands with retries
 redisReply *execute_redis_command(const char *format, ...) {
   if (!is_redis_initialized()) {
     return NULL;
   }
 
-  va_list args;
-  va_start(args, format);
-  redisReply *reply = redisvCommand(redis_ctx, format, args);
-  va_end(args);
+  redisReply *reply = NULL;
+  for (int attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    va_list args;
+    va_start(args, format);
+    reply = redisvCommand(redis_ctx, format, args);
+    va_end(args);
 
-  if (!reply) {
-    LOG_ERROR("Redis command failed: %s", redis_ctx->errstr);
-    return NULL;
+    if (reply) {
+      if (reply->type == REDIS_REPLY_ERROR) {
+        LOG_ERROR("Redis error reply: %s", reply->str);
+        freeReplyObject(reply);
+        reply = NULL;
+      } else {
+        break;
+      }
+    } else {
+      LOG_WARNING("Redis command failed (attempt %d/%d): %s", attempt + 1,
+                  MAX_RETRIES, redis_ctx->errstr);
+      sleep(RETRY_DELAY);
+    }
   }
 
-  if (reply->type == REDIS_REPLY_ERROR) {
-    LOG_ERROR("Redis error reply: %s", reply->str);
-    freeReplyObject(reply);
-    return NULL;
+  if (!reply) {
+    LOG_ERROR("Redis command ultimately failed after %d attempts", MAX_RETRIES);
   }
 
   return reply;
@@ -105,155 +121,50 @@ static int is_redis_running(void) {
   return 0;
 }
 
-// I ddied all of this to make sure that redis is installed and running
-// and that the connection is established before we start using it.
-// This is important because if we try to use Redis without checking
-// if it's installed and running, we might get unexpected errors
-// or crashes. This way, we can provide better error messages and
-// handle the connection more gracefully.
-
 // Initialize Redis connection
 int init_redis(const char *host, int port) {
   if (redis_ctx) {
-    LOG_WARNING("Redis already initialized");
+    LOG_DEBUG("Attempting to connect to Redis at %s:%d", host, port);
     return 1;
   }
 
-  // First check if Redis is installed
-  LOG_INFO("Checking if Redis is installed...");
+  // Check if Redis is installed and running
+  LOG_INFO("Validating Redis installation and status...");
   if (!is_redis_installed()) {
-    LOG_ERROR("Redis is not installed. Please install Redis first.");
-    LOG_ERROR("On Arch Linux: sudo pacman -S redis");
-    LOG_ERROR("On Ubuntu/Debian: sudo apt-get install redis-server");
-    LOG_ERROR("On Fedora: sudo dnf install redis");
+    LOG_ERROR("Redis is not installed. Please install Redis.");
     return 0;
   }
-  LOG_INFO("Redis is installed");
-
-  // Then check if Redis is running
-  LOG_INFO("Checking if Redis is running...");
   if (!is_redis_running()) {
-    LOG_ERROR(
-        "Redis is not running. Please start Redis with one of these commands:");
-    LOG_ERROR("  sudo systemctl start redis");
-    LOG_ERROR("  sudo service redis start");
-    LOG_ERROR("  redis-server");
+    LOG_ERROR("Redis is not running. Please start the Redis server.");
     return 0;
   }
-  LOG_INFO("Redis is running");
 
-  // Connect to Redis via TCP
-  LOG_INFO("Attempting to connect to Redis at %s:%d", host, port);
+  // Connect to Redis
+  LOG_INFO("Connecting to Redis at %s:%d", host, port);
   struct timeval timeout = {1, 500000}; // 1.5 seconds
   redis_ctx = redisConnectWithTimeout(host, port, timeout);
-  if (!redis_ctx) {
-    LOG_ERROR("Redis connection error: Cannot allocate redis context");
-    LOG_ERROR("Possible causes:");
-    LOG_ERROR("1. Memory allocation failure");
-    LOG_ERROR("2. Invalid host or port");
-    LOG_ERROR("3. System resource limits");
+  if (!redis_ctx || redis_ctx->err) {
+    LOG_ERROR("Redis connection failed: %s",
+              redis_ctx ? redis_ctx->errstr : "Unknown error");
+    if (redis_ctx) {
+      redisFree(redis_ctx);
+      redis_ctx = NULL;
+    }
     return 0;
   }
 
-  if (redis_ctx->err) {
-    LOG_ERROR("Redis connection error: %s (error code: %d)", redis_ctx->errstr,
-              redis_ctx->err);
-    LOG_ERROR("Possible causes:");
-    LOG_ERROR("1. Redis server not running");
-    LOG_ERROR("2. Firewall blocking connection");
-    LOG_ERROR("3. Redis server not listening on specified host/port");
-    LOG_ERROR("4. SELinux/AppArmor blocking connection");
-    redisFree(redis_ctx);
-    redis_ctx = NULL;
-    return 0;
-  }
-  LOG_INFO("Redis connection established");
-
-  // Test the connection with a PING
-  LOG_INFO("Testing Redis connection with PING");
+  // Test connection with PING
   redisReply *reply = redisCommand(redis_ctx, "PING");
-  if (!reply) {
-    LOG_ERROR("Redis PING failed: %s (error code: %d)", redis_ctx->errstr,
-              redis_ctx->err);
-    LOG_ERROR("Connection was established but command failed");
-    redisFree(redis_ctx);
-    redis_ctx = NULL;
-    return 0;
-  }
-
-  if (reply->type != REDIS_REPLY_STATUS || strcmp(reply->str, "PONG") != 0) {
-    LOG_ERROR("Redis PING response invalid: type=%d, str=%s", reply->type,
-              reply->str ? reply->str : "NULL");
-    LOG_ERROR("Unexpected response from Redis server");
-    freeReplyObject(reply);
-    redisFree(redis_ctx);
-    redis_ctx = NULL;
-    return 0;
-  }
-
-  freeReplyObject(reply);
-  LOG_INFO("Redis connection test successful");
-
-  // Try to set a test key
-  LOG_INFO("Testing Redis write access");
-  reply = redisCommand(redis_ctx, "SET test_key test_value");
-  if (!reply) {
-    LOG_ERROR("Redis SET failed: %s (error code: %d)", redis_ctx->errstr,
-              redis_ctx->err);
-    LOG_ERROR("Write test failed after successful connection");
-    redisFree(redis_ctx);
-    redis_ctx = NULL;
-    return 0;
-  }
-
-  if (reply->type == REDIS_REPLY_ERROR) {
-    LOG_ERROR("Redis SET error: %s", reply->str);
-    LOG_ERROR("Redis server rejected write operation");
-    freeReplyObject(reply);
+  if (!reply || reply->type != REDIS_REPLY_STATUS ||
+      strcmp(reply->str, "PONG") != 0) {
+    LOG_ERROR("Redis PING failed or returned invalid response");
+    if (reply)
+      freeReplyObject(reply);
     redisFree(redis_ctx);
     redis_ctx = NULL;
     return 0;
   }
   freeReplyObject(reply);
-
-  // Try to get the test key
-  LOG_INFO("Testing Redis read access");
-  reply = redisCommand(redis_ctx, "GET test_key");
-  if (!reply) {
-    LOG_ERROR("Redis GET failed: %s (error code: %d)", redis_ctx->errstr,
-              redis_ctx->err);
-    LOG_ERROR("Read test failed after successful write");
-    redisFree(redis_ctx);
-    redis_ctx = NULL;
-    return 0;
-  }
-
-  if (reply->type == REDIS_REPLY_ERROR) {
-    LOG_ERROR("Redis GET error: %s", reply->str);
-    LOG_ERROR("Redis server rejected read operation");
-    freeReplyObject(reply);
-    redisFree(redis_ctx);
-    redis_ctx = NULL;
-    return 0;
-  }
-
-  if (reply->type != REDIS_REPLY_STRING ||
-      strcmp(reply->str, "test_value") != 0) {
-    LOG_ERROR("Redis GET response invalid: type=%d, str=%s", reply->type,
-              reply->str ? reply->str : "NULL");
-    LOG_ERROR("Data corruption or unexpected response format");
-    freeReplyObject(reply);
-    redisFree(redis_ctx);
-    redis_ctx = NULL;
-    return 0;
-  }
-  freeReplyObject(reply);
-
-  // Clean up test key
-  reply = redisCommand(redis_ctx, "DEL test_key");
-  if (reply) {
-    freeReplyObject(reply);
-  }
 
   LOG_INFO("Redis connection established successfully");
   return 1;
