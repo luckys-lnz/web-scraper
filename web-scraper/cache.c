@@ -13,6 +13,8 @@
 #define MAX_CACHE_SIZE 1000000  // 1MB
 #define MAX_RETRIES 3
 #define RETRY_DELAY 1  // seconds
+#define REDIS_HOST "127.0.0.1"
+#define REDIS_PORT 6379
 
 // Helper function to create cache key
 static char *create_cache_key(const char *prefix, const char *url) {
@@ -24,18 +26,68 @@ static char *create_cache_key(const char *prefix, const char *url) {
 }
 
 // Initialize cache
-int cache_init(void) {
-    if (!is_redis_initialized()) {
-        LOG_ERROR("Redis not initialized");
+int cache_init(redisContext *ctx) {
+    if (!ctx) {
+        LOG_ERROR("Redis context is NULL");
         return 0;
     }
+
+    // Verify Redis is working by setting up initial cache structures
+    pthread_mutex_lock(&redis_mutex);
+    
+    // Test cache write with retry
+    redisReply *reply = NULL;
+    int retry_count = 0;
+    while (retry_count < MAX_RETRIES) {
+        reply = redisCommand(ctx, "SET %stest test_value", CACHE_PREFIX);
+        if (reply && reply->type == REDIS_REPLY_STATUS) {
+            break;
+        }
+        if (reply) {
+            freeReplyObject(reply);
+            reply = NULL;
+        }
+        LOG_WARNING("Cache write test failed, retrying (%d/%d)...", 
+                   retry_count + 1, MAX_RETRIES);
+        sleep(RETRY_DELAY);
+        retry_count++;
+    }
+
+    if (!reply || reply->type != REDIS_REPLY_STATUS) {
+        LOG_ERROR("Failed to write to Redis cache after %d attempts", MAX_RETRIES);
+        pthread_mutex_unlock(&redis_mutex);
+        return 0;
+    }
+    freeReplyObject(reply);
+
+    // Test cache read
+    reply = redisCommand(ctx, "GET %stest", CACHE_PREFIX);
+    if (!reply || reply->type != REDIS_REPLY_STRING || 
+        strcmp(reply->str, "test_value") != 0) {
+        LOG_ERROR("Failed to read from Redis cache");
+        pthread_mutex_unlock(&redis_mutex);
+        return 0;
+    }
+    freeReplyObject(reply);
+
+    // Clean up test key
+    reply = redisCommand(ctx, "DEL %stest", CACHE_PREFIX);
+    if (!reply || reply->type != REDIS_REPLY_INTEGER) {
+        LOG_ERROR("Failed to clean up test key");
+        pthread_mutex_unlock(&redis_mutex);
+        return 0;
+    }
+    freeReplyObject(reply);
+
+    pthread_mutex_unlock(&redis_mutex);
+    LOG_INFO("Cache initialized successfully");
     return 1;
 }
 
 // Store content in cache
-int cache_store_content(const char *url, const char *content, size_t content_size,
+int cache_store_content(redisContext *ctx, const char *url, const char *content, size_t content_size,
                        const char *content_type, int status_code) {
-    if (!is_redis_initialized() || !url || !content) {
+    if (!ctx || !url || !content) {
         return 0;
     }
 
@@ -43,9 +95,9 @@ int cache_store_content(const char *url, const char *content, size_t content_siz
     snprintf(key, sizeof(key), "%s%s", CACHE_PREFIX, url);
 
     pthread_mutex_lock(&redis_mutex);
-    redisReply *reply = execute_redis_command("HMSET %s content %b type %s status %d",
-                                            key, content, content_size,
-                                            content_type, status_code);
+    redisReply *reply = redisCommand(ctx, "HMSET %s content %b type %s status %d",
+                                   key, content, content_size,
+                                   content_type, status_code);
     pthread_mutex_unlock(&redis_mutex);
 
     if (!reply) {
@@ -58,8 +110,8 @@ int cache_store_content(const char *url, const char *content, size_t content_siz
 }
 
 // Store metadata in cache
-int cache_store_metadata(const char *url, const cached_metadata_t *metadata) {
-    if (!redis_ctx || !url || !metadata) {
+int cache_store_metadata(redisContext *ctx, const char *url, const cached_metadata_t *metadata) {
+    if (!ctx || !url || !metadata) {
         LOG_ERROR("Invalid parameters for cache_store_metadata");
         return -1;
     }
@@ -70,7 +122,7 @@ int cache_store_metadata(const char *url, const cached_metadata_t *metadata) {
         return -1;
     }
 
-    redisReply *reply = redisCommand(redis_ctx,
+    redisReply *reply = redisCommand(ctx,
         "HMSET %s title %s description %s keywords %s author %s last_modified %ld",
         key,
         metadata->title ? metadata->title : "",
@@ -88,7 +140,7 @@ int cache_store_metadata(const char *url, const cached_metadata_t *metadata) {
     }
 
     // Set TTL
-    redisReply *ttl_reply = redisCommand(redis_ctx, "EXPIRE %s %d", key, CACHE_TTL);
+    redisReply *ttl_reply = redisCommand(ctx, "EXPIRE %s %d", key, CACHE_TTL);
     if (!ttl_reply || ttl_reply->type == REDIS_REPLY_ERROR) {
         LOG_ERROR("Failed to set metadata cache TTL: %s",
                  ttl_reply ? ttl_reply->str : "Unknown error");
@@ -100,9 +152,9 @@ int cache_store_metadata(const char *url, const cached_metadata_t *metadata) {
 }
 
 // Retrieve content from cache
-int cache_get_content(const char *url, char **content, size_t *content_size,
+int cache_get_content(redisContext *ctx, const char *url, char **content, size_t *content_size,
                      char **content_type, int *status_code) {
-    if (!is_redis_initialized() || !url || !content || !content_size || 
+    if (!ctx || !url || !content || !content_size || 
         !content_type || !status_code) {
         return 0;
     }
@@ -111,7 +163,7 @@ int cache_get_content(const char *url, char **content, size_t *content_size,
     snprintf(key, sizeof(key), "%s%s", CACHE_PREFIX, url);
 
     pthread_mutex_lock(&redis_mutex);
-    redisReply *reply = execute_redis_command("HMGET %s content type status", key);
+    redisReply *reply = redisCommand(ctx, "HMGET %s content type status", key);
     pthread_mutex_unlock(&redis_mutex);
 
     if (!reply || reply->type != REDIS_REPLY_ARRAY || reply->elements != 3) {
@@ -152,8 +204,8 @@ int cache_get_content(const char *url, char **content, size_t *content_size,
 }
 
 // Retrieve metadata from cache
-cached_metadata_t *cache_get_metadata(const char *url) {
-    if (!redis_ctx || !url) {
+cached_metadata_t *cache_get_metadata(redisContext *ctx, const char *url) {
+    if (!ctx || !url) {
         LOG_ERROR("Invalid parameters for cache_get_metadata");
         return NULL;
     }
@@ -164,7 +216,7 @@ cached_metadata_t *cache_get_metadata(const char *url) {
         return NULL;
     }
 
-    redisReply *reply = redisCommand(redis_ctx, "HGETALL %s", key);
+    redisReply *reply = redisCommand(ctx, "HGETALL %s", key);
     free(key);
 
     if (!reply || reply->type == REDIS_REPLY_ERROR || reply->elements == 0) {
@@ -210,8 +262,8 @@ cached_metadata_t *cache_get_metadata(const char *url) {
 }
 
 // Check if URL is cached
-int cache_has_url(const char *url) {
-    if (!redis_ctx || !url) {
+int cache_has_url(redisContext *ctx, const char *url) {
+    if (!ctx || !url) {
         LOG_ERROR("Invalid parameters for cache_has_url");
         return 0;
     }
@@ -222,7 +274,7 @@ int cache_has_url(const char *url) {
         return 0;
     }
 
-    redisReply *reply = redisCommand(redis_ctx, "EXISTS %s", key);
+    redisReply *reply = redisCommand(ctx, "EXISTS %s", key);
     free(key);
 
     if (!reply || reply->type == REDIS_REPLY_ERROR) {
@@ -238,8 +290,8 @@ int cache_has_url(const char *url) {
 }
 
 // Clear cache for a URL
-int cache_clear_url(const char *url) {
-    if (!redis_ctx || !url) {
+int cache_clear_url(redisContext *ctx, const char *url) {
+    if (!ctx || !url) {
         LOG_ERROR("Invalid parameters for cache_clear_url");
         return -1;
     }
@@ -253,7 +305,7 @@ int cache_clear_url(const char *url) {
         return -1;
     }
 
-    redisReply *reply = redisCommand(redis_ctx, "DEL %s %s", content_key, meta_key);
+    redisReply *reply = redisCommand(ctx, "DEL %s %s", content_key, meta_key);
     free(content_key);
     free(meta_key);
 
