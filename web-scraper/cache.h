@@ -28,27 +28,27 @@ typedef struct {
 } cached_metadata_t;
 
 // Initialize cache
-int cache_init(void);
+int cache_init(redisContext *ctx);
 
 // Store content in cache
-int cache_store_content(const char *url, const char *content, size_t content_size, 
+int cache_store_content(redisContext *ctx, const char *url, const char *content, size_t content_size, 
                        const char *content_type, int status_code);
 
 // Store metadata in cache
-int cache_store_metadata(const char *url, const cached_metadata_t *metadata);
+int cache_store_metadata(redisContext *ctx, const char *url, const cached_metadata_t *metadata);
 
 // Get content from cache
-int cache_get_content(const char *url, char **content, size_t *content_size, 
+int cache_get_content(redisContext *ctx, const char *url, char **content, size_t *content_size, 
                      char **content_type, int *status_code);
 
 // Retrieve metadata from cache
-cached_metadata_t *cache_get_metadata(const char *url);
+cached_metadata_t *cache_get_metadata(redisContext *ctx, const char *url);
 
 // Check if URL is cached
-int cache_has_url(const char *url);
+int cache_has_url(redisContext *ctx, const char *url);
 
 // Clear cache for a URL
-int cache_clear_url(const char *url);
+int cache_clear_url(redisContext *ctx, const char *url);
 
 // Cleanup cache
 void cache_cleanup(void);
