@@ -147,4 +147,15 @@ void thread_pool_wait(thread_pool_t *pool) {
         pthread_cond_wait(&pool->queue_not_full, &pool->queue_mutex);
     }
     pthread_mutex_unlock(&pool->queue_mutex);
+}
+
+// Get current number of tasks in queue
+int thread_pool_get_queue_size(thread_pool_t *pool) {
+    if (!pool) return 0;
+    
+    pthread_mutex_lock(&pool->queue_mutex);
+    int size = pool->queue_count;
+    pthread_mutex_unlock(&pool->queue_mutex);
+    
+    return size;
 } 
