@@ -1,18 +1,16 @@
 #ifndef URL_PROCESSOR_H
 #define URL_PROCESSOR_H
 
-#include "scraper.h"
-#include "rate_limiter.h"
 #include <hiredis/hiredis.h>
+#include "types.h"
 
-// Function prototypes
-void *process_url(void *arg);
-void split_url(const char *url, char *base_url, char *target_path);
+// Initialize URL processor
+int init_url_processor(redisContext *ctx);
 
-// Initialize URL processor components
-int init_url_processor(redisContext *redis_ctx, int num_threads);
+// Process a URL in a thread
+void *process_url_thread(void *arg);
 
-// Cleanup URL processor components
+// Cleanup URL processor
 void cleanup_url_processor(void);
 
 #endif // URL_PROCESSOR_H 
