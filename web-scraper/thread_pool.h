@@ -38,4 +38,7 @@ bool thread_pool_add_task(thread_pool_t *pool, void *(*function)(void *), void *
 // Wait for all tasks to complete
 void thread_pool_wait(thread_pool_t *pool);
 
+// Get current number of tasks in queue
+int thread_pool_get_queue_size(thread_pool_t *pool);
+
 #endif // THREAD_POOL_H 
