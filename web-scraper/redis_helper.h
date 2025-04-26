@@ -14,6 +14,9 @@ int init_redis(const char *host, int port);
 // Close Redis connection
 void close_redis(void);
 
+// Get Redis context
+redisContext *get_redis_context(void);
+
 // Check if URL has been visited
 int is_visited(const char *url);
 
