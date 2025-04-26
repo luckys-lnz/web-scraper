@@ -22,7 +22,7 @@ void logger_init(const char *log_file_path) {
     if (log_file) {
         fclose(log_file);
     }
-    log_file = fopen(log_file_path, "a");
+    log_file = fopen(log_file_path, "w");
     if (!log_file) {
         fprintf(stderr, "Failed to open log file: %s\n", strerror(errno));
     }
