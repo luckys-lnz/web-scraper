@@ -21,7 +21,7 @@
 #define MAX_RETRIES 3
 #define RETRY_DELAY 1 // seconds
 
-// Define Redis context and mutex
+// Define Redis context and mutex as global variables
 redisContext *redis_ctx = NULL;
 pthread_mutex_t redis_mutex = PTHREAD_MUTEX_INITIALIZER;
 
@@ -35,21 +35,40 @@ typedef struct {
   int errors;
 } bulk_operation_data;
 
-// Helper function to check if Redis is initialized
-// int is_redis_initialized(void)
-// {
-//   if (!redis_ctx)
-//   {
-//     LOG_ERROR("Redis not initialized");
-//     return 0;
-//   }
-//   return 1;
-// }
-//
-int is_redis_initialized(void) {
-  LOG_DEBUG("redis_ctx at is_redis_initialized(): %p", redis_ctx);
-  return redis_ctx != NULL;
+// Get Redis context
+redisContext *get_redis_context(void) {
+    if (!redis_ctx || redis_ctx->err) {
+        LOG_DEBUG("Redis context is invalid, attempting to reconnect");
+        if (redis_ctx) {
+            redisFree(redis_ctx);
+            redis_ctx = NULL;
+        }
+        if (!init_redis(REDIS_HOST, REDIS_PORT)) {
+            LOG_ERROR("Failed to reconnect to Redis");
+            return NULL;
+        }
+    }
+    return redis_ctx;
 }
+
+// Helper function to check if Redis is initialized
+int is_redis_initialized(void) {
+    redisContext *ctx = get_redis_context();
+    if (!ctx) {
+        LOG_DEBUG("Redis context is NULL");
+        return 0;
+    }
+    
+    // Test the connection with a simple PING
+    redisReply *reply = redisCommand(ctx, "PING");
+    if (!reply) {
+        LOG_ERROR("Redis connection test failed");
+        return 0;
+    }
+    freeReplyObject(reply);
+    return 1;
+}
+
 // Helper function to execute Redis commands with retries
 redisReply *execute_redis_command(const char *format, ...) {
   if (!is_redis_initialized()) {
@@ -123,51 +142,57 @@ static int is_redis_running(void) {
 
 // Initialize Redis connection
 int init_redis(const char *host, int port) {
-  if (redis_ctx) {
-    LOG_DEBUG("Attempting to connect to Redis at %s:%d", host, port);
-    return 1;
-  }
-
-  // Check if Redis is installed and running
-  LOG_INFO("Validating Redis installation and status...");
-  if (!is_redis_installed()) {
-    LOG_ERROR("Redis is not installed. Please install Redis.");
-    return 0;
-  }
-  if (!is_redis_running()) {
-    LOG_ERROR("Redis is not running. Please start the Redis server.");
-    return 0;
-  }
-
-  // Connect to Redis
-  LOG_INFO("Connecting to Redis at %s:%d", host, port);
-  struct timeval timeout = {1, 500000}; // 1.5 seconds
-  redis_ctx = redisConnectWithTimeout(host, port, timeout);
-  if (!redis_ctx || redis_ctx->err) {
-    LOG_ERROR("Redis connection failed: %s",
-              redis_ctx ? redis_ctx->errstr : "Unknown error");
+    // If already connected, verify the connection
     if (redis_ctx) {
-      redisFree(redis_ctx);
-      redis_ctx = NULL;
+        LOG_DEBUG("Redis already connected, verifying connection...");
+        if (is_redis_initialized()) {
+            LOG_INFO("Existing Redis connection is valid");
+            return 1;
+        }
+        LOG_WARNING("Existing Redis connection is invalid, reconnecting...");
+        close_redis();
     }
-    return 0;
-  }
 
-  // Test connection with PING
-  redisReply *reply = redisCommand(redis_ctx, "PING");
-  if (!reply || reply->type != REDIS_REPLY_STATUS ||
-      strcmp(reply->str, "PONG") != 0) {
-    LOG_ERROR("Redis PING failed or returned invalid response");
-    if (reply)
-      freeReplyObject(reply);
-    redisFree(redis_ctx);
-    redis_ctx = NULL;
-    return 0;
-  }
-  freeReplyObject(reply);
+    // Check if Redis is installed and running
+    LOG_INFO("Validating Redis installation and status...");
+    if (!is_redis_installed()) {
+        LOG_ERROR("Redis is not installed. Please install Redis.");
+        return 0;
+    }
+    if (!is_redis_running()) {
+        LOG_ERROR("Redis is not running. Please start the Redis server.");
+        return 0;
+    }
 
-  LOG_INFO("Redis connection established successfully");
-  return 1;
+    // Connect to Redis
+    LOG_INFO("Connecting to Redis at %s:%d", host, port);
+    struct timeval timeout = {1, 500000}; // 1.5 seconds
+    redis_ctx = redisConnectWithTimeout(host, port, timeout);
+    if (!redis_ctx || redis_ctx->err) {
+        LOG_ERROR("Redis connection failed: %s",
+              redis_ctx ? redis_ctx->errstr : "Unknown error");
+        if (redis_ctx) {
+            redisFree(redis_ctx);
+            redis_ctx = NULL;
+        }
+        return 0;
+    }
+
+    // Test connection with PING
+    redisReply *reply = redisCommand(redis_ctx, "PING");
+    if (!reply || reply->type != REDIS_REPLY_STATUS ||
+        strcmp(reply->str, "PONG") != 0) {
+        LOG_ERROR("Redis PING failed or returned invalid response");
+        if (reply)
+            freeReplyObject(reply);
+        redisFree(redis_ctx);
+        redis_ctx = NULL;
+        return 0;
+    }
+    freeReplyObject(reply);
+
+    LOG_INFO("Redis connection established successfully");
+    return 1;
 }
 
 // Close Redis connection
