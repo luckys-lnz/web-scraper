@@ -17,7 +17,7 @@
 #define TREND_COUNT_KEY "trend:count"
 
 // Global variables
-extern redisContext *redis_ctx;  // Changed from definition to extern declaration
+extern redisContext *redis_ctx;
 
 // Initialize the content analyzer
 int init_content_analyzer(redisContext *ctx) {
