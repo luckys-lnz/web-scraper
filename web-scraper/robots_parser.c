@@ -1,15 +1,21 @@
 #include "robots_parser.h"
+#include "logger.h"
+#include "redis_helper.h"
 #include "fetch_url.h"
-#include "mutexes.h"
+#include <curl/curl.h>
+#include <libxml/HTMLparser.h>
+#include <libxml/tree.h>
+#include <libxml/xpath.h>
+#include <regex.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
 #include <errno.h>
+#include <pthread.h>
 
 // Global variables
 extern pthread_mutex_t redis_mutex;
-extern redisContext *redis_ctx;
 
 #define INITIAL_RULE_CAPACITY 16
 #define MAX_RULE_LENGTH 2048
@@ -141,8 +147,9 @@ static int rule_compare(const void *a, const void *b) {
  * @param url The URL of the website to fetch the robots.txt file for.
  * @return 1 if allowed, 0 otherwise.
  */
-void fetch_robots_txt(const char *url) {
+void fetch_robots_txt(const char *url, rate_limiter_t *limiter) {
     CHECK_NULL(url, );
+    CHECK_NULL(limiter, );
     
     char *domain = extract_domain(url);
     CHECK_NULL(domain, );
@@ -159,29 +166,29 @@ void fetch_robots_txt(const char *url) {
     pthread_mutex_lock(&redis_mutex);
     
     // Check if allow key exists and has correct type
-    redisReply *type_check = redisCommand(redis_ctx, "TYPE %s:allow", redis_key);
+    redisReply *type_check = redisCommand(limiter->redis_ctx, "TYPE %s:allow", redis_key);
     if (type_check && type_check->type == REDIS_REPLY_STATUS) {
         if (strcmp(type_check->str, "list") != 0) {
             // Delete the key if it exists with wrong type
-            redisReply *del_reply = redisCommand(redis_ctx, "DEL %s:allow", redis_key);
+            redisReply *del_reply = redisCommand(limiter->redis_ctx, "DEL %s:allow", redis_key);
             freeReplyObject(del_reply);
         }
     }
     freeReplyObject(type_check);
     
     // Check if disallow key exists and has correct type
-    type_check = redisCommand(redis_ctx, "TYPE %s:disallow", redis_key);
+    type_check = redisCommand(limiter->redis_ctx, "TYPE %s:disallow", redis_key);
     if (type_check && type_check->type == REDIS_REPLY_STATUS) {
         if (strcmp(type_check->str, "list") != 0) {
             // Delete the key if it exists with wrong type
-            redisReply *del_reply = redisCommand(redis_ctx, "DEL %s:disallow", redis_key);
+            redisReply *del_reply = redisCommand(limiter->redis_ctx, "DEL %s:disallow", redis_key);
             freeReplyObject(del_reply);
         }
     }
     freeReplyObject(type_check);
     
     // Check if rules are already cached
-    redisReply *exists = redisCommand(redis_ctx, "EXISTS %s:allow", redis_key);
+    redisReply *exists = redisCommand(limiter->redis_ctx, "EXISTS %s:allow", redis_key);
     CHECK_REDIS_REPLY(exists, );
     
     if (exists->integer > 0) {
@@ -259,28 +266,28 @@ void fetch_robots_txt(const char *url) {
     pthread_mutex_lock(&redis_mutex);
     
     // Use pipeline for better performance
-    redisAppendCommand(redis_ctx, "MULTI");
+    redisAppendCommand(limiter->redis_ctx, "MULTI");
     
     // Store allow rules
     for (size_t i = 0; i < allow_count; i++) {
-        redisAppendCommand(redis_ctx, "RPUSH %s:allow %s", redis_key, allow_rules[i]);
+        redisAppendCommand(limiter->redis_ctx, "RPUSH %s:allow %s", redis_key, allow_rules[i]);
     }
     
     // Store disallow rules
     for (size_t i = 0; i < disallow_count; i++) {
-        redisAppendCommand(redis_ctx, "RPUSH %s:disallow %s", redis_key, disallow_rules[i]);
+        redisAppendCommand(limiter->redis_ctx, "RPUSH %s:disallow %s", redis_key, disallow_rules[i]);
     }
     
     // Set expiration
-    redisAppendCommand(redis_ctx, "EXPIRE %s:allow %d", redis_key, RULE_EXPIRY_SECONDS);
-    redisAppendCommand(redis_ctx, "EXPIRE %s:disallow %d", redis_key, RULE_EXPIRY_SECONDS);
+    redisAppendCommand(limiter->redis_ctx, "EXPIRE %s:allow %d", redis_key, RULE_EXPIRY_SECONDS);
+    redisAppendCommand(limiter->redis_ctx, "EXPIRE %s:disallow %d", redis_key, RULE_EXPIRY_SECONDS);
     
-    redisAppendCommand(redis_ctx, "EXEC");
+    redisAppendCommand(limiter->redis_ctx, "EXEC");
     
     // Execute pipeline
     redisReply *reply;
     for (size_t i = 0; i < allow_count + disallow_count + 3; i++) {
-        redisGetReply(redis_ctx, (void **)&reply);
+        redisGetReply(limiter->redis_ctx, (void **)&reply);
         freeReplyObject(reply);
     }
     
@@ -310,7 +317,10 @@ cleanup:
  */
 static int path_matches_rule(const char *path, const char *rule) {
     CHECK_NULL(path, 0);
-    CHECK_NULL(rule, 0);
+    if (!rule) {
+        LOG_DEBUG("Rule is NULL, allowing path by default");
+        return 1;  // Allow by default if no rule
+    }
 
     const char *wildcard = strchr(rule, '*');
     if (!wildcard) {
@@ -362,11 +372,13 @@ static int path_matches_rule(const char *path, const char *rule) {
  * 
  * @param base_url The base URL of the website.
  * @param target_path The path to check against the robots.txt rules.
+ * @param limiter The rate limiter containing the Redis context to use.
  * @return 1 if allowed, 0 otherwise.
  */
-int is_crawl_allowed(const char *base_url, const char *target_path) {
+int is_crawl_allowed(const char *base_url, const char *target_path, rate_limiter_t *limiter) {
     CHECK_NULL(base_url, 1);
     CHECK_NULL(target_path, 1);
+    CHECK_NULL(limiter, 1);
     
     char *domain = extract_domain(base_url);
     CHECK_NULL(domain, 1);
@@ -386,12 +398,12 @@ int is_crawl_allowed(const char *base_url, const char *target_path) {
     pthread_mutex_lock(&redis_mutex);
     
     // Use pipeline for better performance
-    redisAppendCommand(redis_ctx, "LRANGE %s:allow 0 -1", redis_key);
-    redisAppendCommand(redis_ctx, "LRANGE %s:disallow 0 -1", redis_key);
+    redisAppendCommand(limiter->redis_ctx, "LRANGE %s:allow 0 -1", redis_key);
+    redisAppendCommand(limiter->redis_ctx, "LRANGE %s:disallow 0 -1", redis_key);
     
     redisReply *allow_rules, *disallow_rules;
-    redisGetReply(redis_ctx, (void **)&allow_rules);
-    redisGetReply(redis_ctx, (void **)&disallow_rules);
+    redisGetReply(limiter->redis_ctx, (void **)&allow_rules);
+    redisGetReply(limiter->redis_ctx, (void **)&disallow_rules);
     
     pthread_mutex_unlock(&redis_mutex);
     
